@@ -1,6 +1,6 @@
 <template>
-  <div class="p-6 max-w-md mx-auto min-h-screen" >
-    <NuxtPage />
+  <div class="p-6 max-w-md mx-auto min-h-screen flex flex-col" >
+    <NuxtPage class="grow" />
   </div>
 </template>
 

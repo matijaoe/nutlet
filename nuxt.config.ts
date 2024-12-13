@@ -7,4 +7,11 @@ export default defineNuxtConfig({
 	future: {
 		compatibilityVersion: 4,
 	},
+	typescript: {
+		tsConfig: {
+			compilerOptions: {
+				baseUrl: '.',
+			},
+		},
+	},
 })
