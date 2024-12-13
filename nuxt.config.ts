@@ -1,11 +1,13 @@
-// https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
 	compatibilityDate: '2024-11-01',
 	ssr: false,
 	devtools: { enabled: true },
-	modules: ['@nuxtjs/tailwindcss'],
+	modules: ['@nuxtjs/tailwindcss', '@nuxt/icon', '@nuxt/fonts'],
 	future: {
 		compatibilityVersion: 4,
+	},
+	experimental: {
+		typedPages: true,
 	},
 	typescript: {
 		tsConfig: {
@@ -13,5 +15,17 @@ export default defineNuxtConfig({
 				baseUrl: '.',
 			},
 		},
+	},
+	fonts: {
+		families: [
+			{
+				name: 'Geist',
+				provider: 'google',
+			},
+			{
+				name: 'Geist Mono',
+				provider: 'google',
+			},
+		],
 	},
 })
