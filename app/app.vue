@@ -1,24 +1,6 @@
-<template>
-	<div class="p-6 max-w-md mx-auto min-h-screen flex flex-col">
-		<NuxtPage class="grow" />
-		<BottomTabs class="shrink-0 mt-auto" />
-	</div>
-</template>
-
-<style lang="postcss">
-:root {
-	color-scheme: dark;
-}
-
-body {
-	@apply bg-black text-zinc-100;
-}
-</style>
-
-<script setup>
+<script lang="ts" setup>
 useHead({
 	title: 'nutlet',
-	description: 'cashu web wallet',
 	meta: [
 		{
 			name: 'color-scheme',
@@ -27,3 +9,18 @@ useHead({
 	],
 })
 </script>
+
+<template>
+	<Body class="dark">
+		<div class="py-4 px-5 max-w-md mx-auto min-h-screen flex flex-col">
+			<NuxtPage class="grow" />
+			<BottomTabs class="shrink-0 mt-auto" />
+		</div>
+	</Body>
+</template>
+
+<style>
+.dark {
+	color-scheme: dark;
+}
+</style>

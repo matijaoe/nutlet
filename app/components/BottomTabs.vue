@@ -31,7 +31,7 @@ const setTab = (tab: TabId) => {
 			:key="tab.id"
 			@click="setTab(tab.id)"
 			:class="{
-				'text-primary-foreground': selectedTabId === tab.id,
+				'text-primary': selectedTabId === tab.id,
 				'text-muted-foreground': selectedTabId !== tab.id,
 			}"
 			class="flex flex-col items-center"
