@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 import type { RouteLocationRaw } from 'vue-router'
 
-type TabId = 'ecash' | 'history' | 'mints'
+type TabId = 'ecash' | 'activity' | 'mints'
+
 type Tab = {
 	id: TabId
 	label: string
@@ -9,38 +10,37 @@ type Tab = {
 	route?: RouteLocationRaw
 }
 const tabs: Tab[] = [
-	{ id: 'ecash', label: 'ecash', icon: 'lucide:bitcoin' },
-	{ id: 'history', label: 'history', icon: 'lucide:list-ordered' },
-	{ id: 'mints', label: 'mints', icon: 'lucide:landmark' },
+	{ id: 'ecash', label: 'ecash', icon: 'lucide:bitcoin', route: '/' },
+	{
+		id: 'activity',
+		label: 'activity',
+		icon: 'lucide:list-ordered',
+		route: '/activity' as RouteLocationRaw,
+	},
+	{ id: 'mints', label: 'mints', icon: 'lucide:landmark', route: '/mints' },
 ]
 
-const getTabById = (id: TabId) => tabs.find((tab) => tab.id === id)
-
-const selectedTabId = ref<TabId>('ecash')
-const selectedTab = computed(() => getTabById(selectedTabId.value!))
-
-const setTab = (tab: TabId) => {
-	selectedTabId.value = tab
-}
+const route = useRoute()
 </script>
 
 <template>
 	<div class="flex items-center gap-2 justify-evenly py-2">
-		<button
+		<NuxtLink
 			v-for="tab in tabs"
 			:key="tab.id"
-			@click="setTab(tab.id)"
+			:to="tab.route"
 			:class="{
-				'text-primary': selectedTabId === tab.id,
-				'text-muted-foreground': selectedTabId !== tab.id,
+				'text-primary': route.path === tab.route,
+				'text-muted-foreground': route.path !== tab.route,
 			}"
 			class="flex flex-col items-center"
+			exact-active-class="text-primary"
 		>
 			<Icon
 				:name="tab.icon"
 				size="24"
 			/>
 			<span class="text-xs mt-0.5">{{ tab.label }}</span>
-		</button>
+		</NuxtLink>
 	</div>
 </template>

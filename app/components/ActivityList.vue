@@ -33,6 +33,14 @@ const formatDate = (date: Date) => {
 		timeStyle: 'short',
 	}).format(date)
 }
+
+const formatFiat = (sats: number, rate: number = 990) => {
+	return Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		maximumFractionDigits: 2,
+	}).format(sats / rate)
+}
 </script>
 
 <template>
@@ -40,27 +48,33 @@ const formatDate = (date: Date) => {
 		<div
 			v-for="tx in transactions"
 			:key="tx.id"
-			class="flex items-center justify-between px-4 py-1"
+			class="flex items-start justify-between py-1"
 		>
 			<div class="flex flex-col gap-1">
 				<span class="text-sm text-foreground">
 					{{ tx.type }}
 					{{ tx.type === 'minted' ? '⚡' : '' }}
 				</span>
-				<span class="text-sm text-muted-foreground">
+				<span class="text-xs text-muted-foreground">
 					{{ formatDate(tx.date) }}
 				</span>
 			</div>
-			<span
-				class="text-sm"
-				:class="{
-					'text-foreground': tx.type === 'sent',
-					'text-green-500': tx.type === 'redeemed',
-					'text-yellow-500': tx.type === 'minted',
-				}"
-			>
-				{{ prefixAmount(tx.amount, tx.type) }}{{ formatAmount(tx.amount) }} sats
-			</span>
+			<div class="flex flex-col items-end">
+				<span
+					class="text-sm"
+					:class="{
+						'text-foreground': tx.type === 'sent',
+						'text-green-500': tx.type === 'redeemed',
+						'text-yellow-500': tx.type === 'minted',
+					}"
+				>
+					{{ prefixAmount(tx.amount, tx.type)
+					}}{{ formatAmount(tx.amount) }} sats
+				</span>
+				<span class="text-xs text-muted-foreground">
+					{{ formatFiat(tx.amount) }}
+				</span>
+			</div>
 		</div>
 	</div>
 </template>

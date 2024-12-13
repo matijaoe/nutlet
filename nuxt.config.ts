@@ -1,4 +1,3 @@
-// https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
 	compatibilityDate: '2024-11-01',
 	ssr: false,
@@ -6,6 +5,9 @@ export default defineNuxtConfig({
 	modules: ['@nuxtjs/tailwindcss', '@nuxt/icon', '@nuxt/fonts'],
 	future: {
 		compatibilityVersion: 4,
+	},
+	experimental: {
+		typedPages: true,
 	},
 	typescript: {
 		tsConfig: {

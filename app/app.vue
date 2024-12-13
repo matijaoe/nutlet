@@ -12,8 +12,11 @@ useHead({
 
 <template>
 	<Body class="dark">
-		<div class="py-4 px-5 max-w-md mx-auto min-h-screen flex flex-col">
+		<div class="py-4 px-5 max-w-sm mx-auto min-h-screen flex flex-col">
+			<TheTopBar />
+
 			<NuxtPage class="grow" />
+
 			<BottomTabs class="shrink-0 mt-auto" />
 		</div>
 	</Body>
