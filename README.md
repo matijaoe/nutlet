@@ -1,4 +1,4 @@
-# nutlet
+# nutlet 🤏🏻
 
 [Cashu](https://cashu.space/) web wallet. 
 
