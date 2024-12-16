@@ -34,15 +34,24 @@ const { copy: copyInvoice, copied } = useClipboard({
 	source: () => invoice.value,
 })
 
-async function setupMintAndWallet() {
+function getMintBalance(mintUrl: string) {
+	const mintProofs = proofsByMint.value[mintUrl] || []
+	return sum(mintProofs.map((proof) => proof.amount))
+}
+
+async function setupMintsAndWallet() {
 	try {
 		error.value = null
-		const mint = await mintStore.initMint()
-		walletStore.initWallet(mint)
+		await mintStore.initAllMints()
+
+		if (mintStore.currentMint) {
+			walletStore.initWallet(mintStore.currentMint)
+		}
+
 		checkPendingQuotes()
 	} catch (e) {
-		console.error('Mint initialization error:', e)
-		error.value = 'Failed to connect to mint.'
+		console.error('Mints initialization error:', e)
+		error.value = 'Failed to connect to mints.'
 	}
 }
 
@@ -68,7 +77,7 @@ async function requestMint() {
 }
 
 async function checkPendingQuotes() {
-	if (!walletStore.wallet || !mintStore.mint?.mintUrl) return
+	if (!walletStore.wallet || !mintStore.currentMint?.mintUrl) return
 
 	for (const quote of pendingMintQuotes.value) {
 		try {
@@ -87,10 +96,10 @@ async function checkPendingQuotes() {
 				)
 				console.log('[proofs]', mintedProofs)
 
-				proofsByMint.value[mintStore.mint.mintUrl] ??= []
+				proofsByMint.value[mintStore.currentMint.mintUrl] ??= []
 
-				proofsByMint.value[mintStore.mint.mintUrl] = [
-					...proofsByMint.value[mintStore.mint.mintUrl]!,
+				proofsByMint.value[mintStore.currentMint.mintUrl] = [
+					...proofsByMint.value[mintStore.currentMint.mintUrl]!,
 					...mintedProofs,
 				]
 
@@ -104,10 +113,10 @@ async function checkPendingQuotes() {
 }
 
 const currentBalance = computed(() => {
-	if (!mintStore.mint?.mintUrl) {
+	if (!mintStore.currentMint?.mintUrl) {
 		return 0
 	}
-	const mintProofs = proofsByMint.value[mintStore.mint.mintUrl] || []
+	const mintProofs = proofsByMint.value[mintStore.currentMint.mintUrl] || []
 	return sum(mintProofs.map((proof) => proof.amount))
 })
 
@@ -128,33 +137,13 @@ async function cancelQuote(quoteId: string) {
 }
 
 onMounted(() => {
-	setupMintAndWallet()
+	setupMintsAndWallet()
 })
 </script>
 
 <template>
 	<div class="pt-5">
 		<h1 class="mb-4 text-2xl font-medium">Mints</h1>
-
-		<UiCard class="mb-4">
-			<UiCardHeader>
-				<UiCardTitle>Select Mint</UiCardTitle>
-			</UiCardHeader>
-			<UiCardContent>
-				<div class="flex flex-wrap gap-2">
-					<UiButton
-						v-for="availableMint in mintStore.availableMints"
-						:key="availableMint.url"
-						:variant="
-							mintStore.mintUrl === availableMint.url ? 'default' : 'outline'
-						"
-						@click="mintStore.mintUrl = availableMint.url"
-					>
-						{{ availableMint.name }}
-					</UiButton>
-				</div>
-			</UiCardContent>
-		</UiCard>
 
 		<UiCard
 			v-if="error"
@@ -166,108 +155,141 @@ onMounted(() => {
 			</UiCardHeader>
 		</UiCard>
 
-		<UiCard v-if="mintStore.mintInfo">
-			<UiCardHeader>
-				<UiCardTitle>{{ mintStore.mintInfo.name }}</UiCardTitle>
-				<UiCardDescription>{{ mintStore.mint?.mintUrl }}</UiCardDescription>
-				<UiCardDescription>{{
-					mintStore.mintInfo.description
-				}}</UiCardDescription>
-			</UiCardHeader>
-			<UiCardContent>
-				<p class="text-lg font-medium">Balance: {{ currentBalance }} sats</p>
-			</UiCardContent>
-		</UiCard>
-
-		<div class="mt-4 space-y-4">
-			<div class="flex items-center gap-2">
-				<UiInput
-					v-model.number="amount"
-					type="number"
-				/>
-				<UiButton
-					@click="requestMint"
-					:disabled="!amount || amount <= 0"
-					>Mint</UiButton
-				>
-			</div>
-
-			<div
-				v-if="pendingMintQuotes.length > 0"
-				class="flex items-center gap-2"
+		<div class="flex flex-col gap-4">
+			<UiCard
+				v-for="mint in mintStore.availableMints"
+				:key="mint.url"
+				:class="{
+					'border-primary': mintStore.selectedMintUrl === mint.url,
+				}"
 			>
-				<UiButton @click="checkPendingQuotes">Check payment</UiButton>
-			</div>
-
-			<UiCard v-if="invoice">
 				<UiCardHeader>
-					<UiCardTitle>Lightning Invoice</UiCardTitle>
+					<UiCardTitle class="flex items-center justify-between">
+						<span>{{ mint.name }}</span>
+						<UiBadge
+							v-if="mintStore.selectedMintUrl === mint.url"
+							variant="outline"
+						>
+							Selected
+						</UiBadge>
+					</UiCardTitle>
+					<UiCardDescription>{{ mint.url }}</UiCardDescription>
+					<UiCardDescription v-if="mintStore.mintsInfo[mint.url]">
+						{{ mintStore.mintsInfo[mint.url]?.description }}
+					</UiCardDescription>
 				</UiCardHeader>
 				<UiCardContent>
-					<pre class="whitespace-pre-wrap break-all font-mono text-sm">{{
-						invoice
-					}}</pre>
-
-					<div class="flex items-center gap-2 mt-2">
+					<div class="space-y-2">
+						<p class="text-lg font-medium">
+							Balance: {{ getMintBalance(mint.url) }} sats
+						</p>
 						<UiButton
-							@click="copyInvoice"
-							size="sm"
-							variant="secondary"
+							v-if="mintStore.selectedMintUrl !== mint.url"
+							variant="outline"
+							@click="mintStore.selectMint(mint.url)"
 						>
-							{{ copied ? 'Copied!' : 'Copy' }}
+							Set as default
 						</UiButton>
 					</div>
 				</UiCardContent>
 			</UiCard>
+		</div>
 
-			<UiCard v-if="pendingMintQuotes.length > 0">
-				<UiCardHeader>
-					<UiCardTitle>Pending Quotes</UiCardTitle>
-				</UiCardHeader>
-				<UiCardContent>
-					<div class="flex flex-col gap-5">
-						<div
-							v-for="quote in pendingMintQuotes"
-							:key="quote.quote"
-						>
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center gap-2">
-									<span>{{ quote.amount }} sats</span>
-									<UiBadge
-										size="sm"
-										:variant="
-											quote.state === MintQuoteState.PAID
-												? 'default'
-												: 'destructive'
-										"
-									>
-										{{ quote.state }}
-									</UiBadge>
-								</div>
-								<span class="text-sm text-muted-foreground break-all">
-									{{ quote.quote }}
-								</span>
-								<div class="flex items-center gap-2">
-									<UiButton
-										@click="checkPendingQuotes"
-										size="sm"
-										variant="secondary"
-									>
-										Check payment
-									</UiButton>
-									<UiButton
-										@click="cancelQuote(quote.quote)"
-										size="sm"
-										variant="secondary"
-									>
-										Cancel
-									</UiButton>
+		<div
+			v-if="mintStore.currentMintInfo"
+			class="mt-8"
+		>
+			<h2 class="mb-4 text-xl font-medium">Mint Tokens</h2>
+			<div class="mt-4 space-y-4">
+				<div class="flex items-center gap-2">
+					<UiInput
+						v-model.number="amount"
+						type="number"
+					/>
+					<UiButton
+						@click="requestMint"
+						:disabled="!amount || amount <= 0"
+						>Mint</UiButton
+					>
+				</div>
+
+				<div
+					v-if="pendingMintQuotes.length > 0"
+					class="flex items-center gap-2"
+				>
+					<UiButton @click="checkPendingQuotes">Check payment</UiButton>
+				</div>
+
+				<UiCard v-if="invoice">
+					<UiCardHeader>
+						<UiCardTitle>Lightning Invoice</UiCardTitle>
+					</UiCardHeader>
+					<UiCardContent>
+						<pre class="whitespace-pre-wrap break-all font-mono text-sm">{{
+							invoice
+						}}</pre>
+
+						<div class="flex items-center gap-2 mt-2">
+							<UiButton
+								@click="copyInvoice"
+								size="sm"
+								variant="secondary"
+							>
+								{{ copied ? 'Copied!' : 'Copy' }}
+							</UiButton>
+						</div>
+					</UiCardContent>
+				</UiCard>
+
+				<UiCard v-if="pendingMintQuotes.length > 0">
+					<UiCardHeader>
+						<UiCardTitle>Pending Quotes</UiCardTitle>
+					</UiCardHeader>
+					<UiCardContent>
+						<div class="flex flex-col gap-5">
+							<div
+								v-for="quote in pendingMintQuotes"
+								:key="quote.quote"
+							>
+								<div class="flex flex-col gap-2">
+									<div class="flex items-center gap-2">
+										<span>{{ quote.amount }} sats</span>
+										<UiBadge
+											size="sm"
+											:variant="
+												quote.state === MintQuoteState.PAID
+													? 'default'
+													: 'destructive'
+											"
+										>
+											{{ quote.state }}
+										</UiBadge>
+									</div>
+									<span class="text-sm text-muted-foreground break-all">
+										{{ quote.quote }}
+									</span>
+									<div class="flex items-center gap-2">
+										<UiButton
+											@click="checkPendingQuotes"
+											size="sm"
+											variant="secondary"
+										>
+											Check payment
+										</UiButton>
+										<UiButton
+											@click="cancelQuote(quote.quote)"
+											size="sm"
+											variant="secondary"
+										>
+											Cancel
+										</UiButton>
+									</div>
 								</div>
 							</div>
 						</div>
-					</div>
-				</UiCardContent>
-			</UiCard>
+					</UiCardContent>
+				</UiCard>
+			</div>
 		</div>
 	</div>
 </template>
