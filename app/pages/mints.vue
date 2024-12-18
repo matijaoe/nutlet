@@ -1,8 +1,11 @@
 <script lang="ts" setup>
 import {
+	getDecodedToken,
+	getEncodedTokenV4,
 	MintQuoteState,
 	type MintQuoteResponse,
 	type Proof,
+	type Token,
 } from '@cashu/cashu-ts'
 import { StorageSerializers, useClipboard, useLocalStorage } from '@vueuse/core'
 import { useQRCode } from '@vueuse/integrations/useQRCode'
@@ -23,10 +26,121 @@ const invoice = ref('')
 const invoiceQR = useQRCode(invoice)
 const currentQuote = ref<MintQuoteResponse>()
 
+const ecashAmount = ref(0)
+
 const error = ref<string | null>(null)
 
 const mintStore = useMintStore()
 const walletStore = useWalletStore()
+
+const getMintProofs = (mintUrl: string) => {
+	const mint = mintStore.mints.find((mint) => mint.url === mintUrl)
+	return proofs.value.filter((proof) =>
+		mint?.keysets.some((keyset) => keyset.id === proof.id)
+	)
+}
+
+const removeProofsFromWallet = (proofsToRemove: Proof[]) => {
+	proofs.value = proofs.value.filter(
+		(p) =>
+			!proofsToRemove.some(
+				(remove) =>
+					remove.id === p.id &&
+					remove.secret === p.secret &&
+					remove.amount === p.amount
+			)
+	)
+}
+
+const removeSentProofsFromToken = async (encodedToken: string) => {
+	if (!walletStore.wallet || !mintStore.activeMint) return
+
+	try {
+		const decodedToken = getDecodedToken(encodedToken)
+		const sentProofs = decodedToken.proofs
+		removeProofsFromWallet(sentProofs)
+		console.log('Successfully removed sent proofs')
+	} catch (error) {
+		console.error('Error removing proofs:', error)
+	}
+}
+
+const sendEcash = async (amount: number) => {
+	if (!walletStore.wallet || !mintStore.activeMint?.url) return
+
+	try {
+		// Store pending transaction to prevent double-sends
+		const pendingKey = `pending_${Date.now()}`
+		localStorage.setItem(pendingKey, 'true')
+
+		// 1. Get the split with current proofs
+		const { keep, send } = await walletStore.wallet.send(amount, proofs.value)
+
+		// 2. Create and verify token first
+		const tokenToSend = {
+			proofs: send,
+			mint: mintStore.activeMint?.url,
+			unit: 'sat',
+		} as Token
+
+		const token = getEncodedTokenV4(tokenToSend)
+
+		try {
+			// 3. Verify token is valid and not spent
+			const decodedToken = getDecodedToken(token)
+			// Optional: Add mint verification here
+
+			// 4. Only if verification passes, remove proofs
+			removeProofsFromWallet(send)
+
+			// Clear pending status
+			localStorage.removeItem(pendingKey)
+
+			return token
+		} catch (error) {
+			console.error('Token verification failed:', error)
+			// Don't remove proofs if verification fails
+			return null
+		}
+	} catch (error) {
+		console.error('Error creating token:', error)
+		return null
+	}
+}
+
+const recoverMultipleLostTokens = async (tokens: string[]) => {
+	try {
+		for (const token of tokens) {
+			try {
+				const decodedToken = getDecodedToken(token)
+				console.log(
+					'Recovered amount:',
+					decodedToken.proofs.reduce((sum, p) => sum + p.amount, 0)
+				)
+				proofs.value = [...proofs.value, ...decodedToken.proofs]
+			} catch (error) {
+				console.error('Error recovering token:', token.slice(0, 20) + '...')
+			}
+		}
+		console.log('Recovery complete')
+	} catch (error) {
+		console.error('Error in recovery process:', error)
+	}
+}
+
+const lostTokens: string[] = []
+
+// Add a recovery function
+const recoverLostProofs = async (token: string) => {
+	try {
+		const decodedToken = getDecodedToken(token)
+		// Add these proofs back to wallet
+		proofs.value = [...proofs.value, ...decodedToken.proofs]
+		console.log('Recovered proofs from token')
+	} catch (error) {
+		console.error('Error recovering proofs:', error)
+	}
+}
 
 const { copy: copyInvoice, copied } = useClipboard({
 	source: () => invoice.value,
@@ -240,119 +354,140 @@ onMounted(() => {
 			v-if="mintStore.activeMint?.info"
 			class="mt-8"
 		>
-			<h2 class="mb-4 text-xl font-medium">Mint Tokens</h2>
-			<div class="mt-4 space-y-4">
-				<div class="flex items-center gap-2">
-					<UiInput
-						v-model.number="amount"
-						type="number"
-						:disabled="isInvoiceRequestLoading"
-					/>
-					<UiButton
-						@click="requestMint()"
-						:disabled="!amount || amount <= 0 || isInvoiceRequestLoading"
+			<section>
+				<h2 class="mb-4 text-xl font-medium">Mint Tokens</h2>
+				<div class="mt-4 space-y-4">
+					<div class="flex items-center gap-2">
+						<UiInput
+							v-model.number="amount"
+							type="number"
+							:disabled="isInvoiceRequestLoading"
+						/>
+						<UiButton
+							@click="requestMint()"
+							:disabled="!amount || amount <= 0 || isInvoiceRequestLoading"
+						>
+							{{ isInvoiceRequestLoading ? 'Requesting...' : 'Mint' }}
+						</UiButton>
+					</div>
+
+					<div
+						v-if="pendingMintQuotes.length > 0"
+						class="flex items-center gap-2"
 					>
-						{{ isInvoiceRequestLoading ? 'Requesting...' : 'Mint' }}
-					</UiButton>
-				</div>
+						<UiButton @click="checkPendingQuotes">Check payment</UiButton>
+					</div>
 
-				<div
-					v-if="pendingMintQuotes.length > 0"
-					class="flex items-center gap-2"
-				>
-					<UiButton @click="checkPendingQuotes">Check payment</UiButton>
-				</div>
+					<UiCard v-if="invoice">
+						<UiCardHeader>
+							<UiCardTitle>Lightning Invoice</UiCardTitle>
+						</UiCardHeader>
+						<UiCardContent class="flex flex-col gap-3">
+							<span class="whitespace-pre-wrap break-all font-mono text-sm">
+								{{ invoice }}
+							</span>
 
-				<UiCard v-if="invoice">
-					<UiCardHeader>
-						<UiCardTitle>Lightning Invoice</UiCardTitle>
-					</UiCardHeader>
-					<UiCardContent class="flex flex-col gap-3">
-						<span class="whitespace-pre-wrap break-all font-mono text-sm">
-							{{ invoice }}
-						</span>
+							<data>
+								<img
+									:src="invoiceQR"
+									alt="Lightning invoice QR code"
+								/>
+							</data>
 
-						<data>
-							<img
-								:src="invoiceQR"
-								alt="Lightning invoice QR code"
-							/>
-						</data>
+							<div class="flex items-center justify-between gap-2">
+								<UiButton
+									@click="copyInvoice"
+									size="sm"
+									variant="secondary"
+								>
+									{{ copied ? 'Copied!' : 'Copy invoice' }}
+								</UiButton>
+								<UiButton
+									@click="cancelQuote(currentQuote!.quote)"
+									size="sm"
+									variant="outline"
+								>
+									Cancel
+								</UiButton>
+							</div>
+						</UiCardContent>
+					</UiCard>
 
-						<div class="flex items-center justify-between gap-2">
-							<UiButton
-								@click="copyInvoice"
-								size="sm"
-								variant="secondary"
-							>
-								{{ copied ? 'Copied!' : 'Copy invoice' }}
-							</UiButton>
-							<UiButton
-								@click="cancelQuote(currentQuote!.quote)"
-								size="sm"
-								variant="outline"
-							>
-								Cancel
-							</UiButton>
-						</div>
-					</UiCardContent>
-				</UiCard>
-
-				<UiCard v-if="pendingMintQuotes.length > 0">
-					<UiCardHeader>
-						<UiCardTitle>Pending Quotes</UiCardTitle>
-					</UiCardHeader>
-					<UiCardContent>
-						<div class="flex flex-col gap-5">
-							<div
-								v-for="quote in pendingMintQuotes"
-								:key="quote.quote"
-							>
-								<div class="flex flex-col gap-2">
-									<div class="flex items-center gap-2">
-										<span>{{ quote.amount }} sats</span>
+					<UiCard v-if="pendingMintQuotes.length > 0">
+						<UiCardHeader>
+							<UiCardTitle>Pending Quotes</UiCardTitle>
+						</UiCardHeader>
+						<UiCardContent>
+							<div class="flex flex-col gap-5">
+								<div
+									v-for="quote in pendingMintQuotes"
+									:key="quote.quote"
+								>
+									<div class="flex flex-col gap-2">
+										<div class="flex items-center gap-2">
+											<span>{{ quote.amount }} sats</span>
+											<UiBadge
+												:variant="
+													quote.state === MintQuoteState.PAID
+														? 'default'
+														: 'destructive'
+												"
+											>
+												{{ quote.state }}
+											</UiBadge>
+										</div>
 										<UiBadge
-											:variant="
-												quote.state === MintQuoteState.PAID
-													? 'default'
-													: 'destructive'
-											"
-										>
-											{{ quote.state }}
-										</UiBadge>
-									</div>
-									<UiBadge
-										size="sm"
-										variant="outline"
-										class="w-fit"
-									>
-										{{ quote.mintUrl }}
-									</UiBadge>
-									<span class="text-sm text-muted-foreground break-all">
-										{{ quote.quote }}
-									</span>
-									<div class="flex items-center gap-2">
-										<UiButton
-											@click="checkQuote(quote)"
-											size="sm"
-											variant="secondary"
-										>
-											Check payment
-										</UiButton>
-										<UiButton
-											@click="cancelQuote(quote.quote)"
 											size="sm"
 											variant="outline"
+											class="w-fit"
 										>
-											Cancel
-										</UiButton>
+											{{ quote.mintUrl }}
+										</UiBadge>
+										<span class="text-sm text-muted-foreground break-all">
+											{{ quote.quote }}
+										</span>
+										<div class="flex items-center gap-2">
+											<UiButton
+												@click="checkQuote(quote)"
+												size="sm"
+												variant="secondary"
+											>
+												Check payment
+											</UiButton>
+											<UiButton
+												@click="cancelQuote(quote.quote)"
+												size="sm"
+												variant="outline"
+											>
+												Cancel
+											</UiButton>
+										</div>
 									</div>
 								</div>
 							</div>
-						</div>
-					</UiCardContent>
-				</UiCard>
-			</div>
+						</UiCardContent>
+					</UiCard>
+				</div>
+			</section>
+
+			<section>
+				<div class="flex items-center gap-2">
+					<UiInput
+						v-model.number="ecashAmount"
+						type="number"
+					/>
+					<UiButton
+						@click="sendEcash(ecashAmount)"
+						:disabled="!ecashAmount || ecashAmount <= 0"
+					>
+						Generate ecash token
+					</UiButton>
+				</div>
+			</section>
 		</div>
+
+		<UiButton @click="recoverMultipleLostTokens(lostTokens)"
+			>Recover lost tokens</UiButton
+		>
 	</div>
 </template>
