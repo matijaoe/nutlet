@@ -1,4 +1,9 @@
-import { CashuMint, type GetInfoResponse } from '@cashu/cashu-ts'
+import {
+	CashuMint,
+	type GetInfoResponse,
+	type MintKeys,
+	type MintKeyset,
+} from '@cashu/cashu-ts'
 import { defineStore } from 'pinia'
 import { StorageSerializers, useLocalStorage } from '@vueuse/core'
 
@@ -7,7 +12,7 @@ export type MintConfig = {
 	name: string
 }
 
-const defaultMints: MintConfig[] = [
+export const defaultMints: MintConfig[] = [
 	{
 		url: 'https://mint.minibits.cash/Bitcoin',
 		name: 'Minibits',
@@ -16,85 +21,88 @@ const defaultMints: MintConfig[] = [
 		url: 'https://mint2.nutmix.cash',
 		name: 'Nutmix',
 	},
+	{
+		url: 'https://mint.lnvoltz.com',
+		name: 'Voltz',
+	},
 ] as const
 
+type StoredMint = {
+	url: CashuMint['_mintUrl']
+	mint: CashuMint
+	info: GetInfoResponse
+	keys: MintKeys[]
+	keysets: MintKeyset[]
+}
+
 export const useMintStore = defineStore('mint', () => {
-	const availableMints = useLocalStorage<MintConfig[]>(
-		'available_mints',
-		defaultMints,
-		{ serializer: StorageSerializers.object }
-	)
+	const mints = useLocalStorage<StoredMint[]>('cashu.mints', [])
 
-	const mintsInfo = ref<Record<string, GetInfoResponse | null>>({})
-	const mints = ref<Record<string, CashuMint>>({})
+	const getMint = (mintUrl: string) => {
+		return mints.value.find((m) => m.url === mintUrl) || null
+	}
 
-	const selectedMintUrl = useLocalStorage<string | null>(
-		'selected_mint_url',
+	const activeMintUrl = useLocalStorage<string | null>(
+		'cashu.active_mint_url',
 		defaultMints[0]?.url || null
 	)
 
-	const currentMint = computed(() =>
-		selectedMintUrl.value ? mints.value[selectedMintUrl.value] : null
-	)
-	const currentMintInfo = computed(() =>
-		selectedMintUrl.value ? mintsInfo.value[selectedMintUrl.value] : null
+	const activeMint = computed(() =>
+		activeMintUrl.value ? getMint(activeMintUrl.value) : null
 	)
 
 	const initMint = async (mintUrl: string) => {
 		const mint = new CashuMint(mintUrl)
+		console.log('[initMint]', mintUrl)
+
 		try {
 			const info = await mint.getInfo()
-			mints.value[mintUrl] = mint
-			mintsInfo.value[mintUrl] = info
+			const { keysets } = await mint.getKeySets()
+			const { keysets: keys } = await mint.getKeys()
+
+			const storedMint: StoredMint = {
+				url: mintUrl,
+				mint,
+				info,
+				keysets,
+				keys,
+			}
+
+			// check if the mint is already in the list, if so, update it
+			const index = mints.value.findIndex((m) => m.url === mintUrl)
+			if (index !== -1) {
+				mints.value[index] = storedMint
+			} else {
+				mints.value.push(storedMint)
+			}
 			return mint
 		} catch (e) {
 			console.error(`Failed to init mint ${mintUrl}:`, e)
-			mintsInfo.value[mintUrl] = null
 			return null
 		}
 	}
 
 	const initAllMints = async () => {
-		await Promise.all(availableMints.value.map((mint) => initMint(mint.url)))
+		await Promise.all(defaultMints.map((mint) => initMint(mint.url)))
 	}
 
 	const selectMint = (mintUrl: string) => {
-		selectedMintUrl.value = mintUrl
-	}
-
-	const addMint = (mint: MintConfig) => {
-		if (!availableMints.value.some((m) => m.url === mint.url)) {
-			availableMints.value.push(mint)
-			initMint(mint.url)
-		}
-	}
-
-	const removeMint = (mintUrl: string) => {
-		availableMints.value = availableMints.value.filter((m) => m.url !== mintUrl)
-		delete mints.value[mintUrl]
-		delete mintsInfo.value[mintUrl]
-
-		// If we removed the selected mint, select the first available one
-		if (
-			selectedMintUrl.value === mintUrl &&
-			availableMints.value?.length > 0 &&
-			availableMints.value[0]?.url
-		) {
-			selectedMintUrl.value = availableMints.value[0].url
+		if (mints.value.some((m) => m.url === mintUrl)) {
+			activeMintUrl.value = mintUrl
+		} else {
+			activeMintUrl.value = defaultMints[0]?.url || null
+			console.error(
+				`Mint ${mintUrl} not found, selecting default mint ${defaultMints[0]?.url}`
+			)
 		}
 	}
 
 	return {
-		availableMints,
-		selectedMintUrl,
-		currentMint,
-		currentMintInfo,
+		activeMintUrl,
+		activeMint,
 		mints,
-		mintsInfo,
 		initMint,
 		initAllMints,
 		selectMint,
-		addMint,
-		removeMint,
 	}
 })

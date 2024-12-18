@@ -1,5 +1,9 @@
 <script lang="ts" setup>
-import { MintQuoteState, type MintQuoteResponse } from '@cashu/cashu-ts'
+import {
+	MintQuoteState,
+	type MintQuoteResponse,
+	type Proof,
+} from '@cashu/cashu-ts'
 import { StorageSerializers, useClipboard, useLocalStorage } from '@vueuse/core'
 import { useQRCode } from '@vueuse/integrations/useQRCode'
 import { sum } from '~/lib/array'
@@ -8,13 +12,12 @@ import { useWalletStore } from '~/store/wallet'
 import type { StoredQuote } from '~/types'
 
 const pendingMintQuotes = useLocalStorage<StoredQuote[]>(
-	'pending_mint_quotes',
+	'cashu.pending_mint_quotes',
 	[],
 	{ serializer: StorageSerializers.object }
 )
 
-const proofsByMint = useMintProofs()
-
+const proofs = useProofs()
 const amount = ref()
 const invoice = ref('')
 const invoiceQR = useQRCode(invoice)
@@ -29,8 +32,19 @@ const { copy: copyInvoice, copied } = useClipboard({
 	source: () => invoice.value,
 })
 
-function getMintBalance(mintUrl: string) {
-	const mintProofs = proofsByMint.value[mintUrl] || []
+const getMintForProof = (proof: Proof) => {
+	const mint = mintStore.mints.find((mint) =>
+		mint.keysets.some((keyset) => keyset.id === proof.id)
+	)
+	return mint?.url
+}
+
+const getMintBalance = (mintUrl: string) => {
+	const mint = mintStore.mints.find((mint) => mint.url === mintUrl)
+	const mintKeysetIds = mint?.keysets.map((keyset) => keyset.id)
+	const mintProofs = proofs.value.filter((proof) =>
+		mintKeysetIds?.includes(proof.id)
+	)
 	return sum(mintProofs.map((proof) => proof.amount))
 }
 
@@ -39,8 +53,8 @@ async function setupMintsAndWallet() {
 		error.value = null
 		await mintStore.initAllMints()
 
-		if (mintStore.currentMint) {
-			walletStore.initWallet(mintStore.currentMint)
+		if (mintStore.activeMint) {
+			walletStore.initWallet(mintStore.activeMint.mint)
 		}
 
 		checkPendingQuotes()
@@ -50,31 +64,35 @@ async function setupMintsAndWallet() {
 	}
 }
 
-async function requestMint() {
-	if (!walletStore.wallet || !mintStore.currentMint?.mintUrl) return
+const isInvoiceRequestLoading = ref(false)
+async function requestMint(mintUrl?: string) {
+	if (!walletStore.wallet || !mintStore.activeMint?.url) return
 
 	try {
+		isInvoiceRequestLoading.value = true
 		// 1. Create mint quote (get Lightning invoice)
-		const mintQuote = await walletStore.wallet.createMintQuote(amount.value)
-		console.log('[mint quote]', mintQuote)
+		currentQuote.value = await walletStore.wallet.createMintQuote(amount.value)
+		console.log('[mint quote]', currentQuote.value)
+		console.log('active mint url', mintUrl || mintStore.activeMint?.url)
 
 		// Store the quote for later with the amount
-		currentQuote.value = mintQuote
 		pendingMintQuotes.value.push({
-			...mintQuote,
+			...currentQuote.value,
 			amount: amount.value, // Store the original amount with the quote
-			mintUrl: mintStore.currentMint?.mintUrl,
+			mintUrl: mintUrl || mintStore.activeMint?.url,
 		})
 
-		invoice.value = mintQuote.request
+		invoice.value = currentQuote.value.request
 		amount.value = undefined
 	} catch (e) {
 		console.error('Mint quote error:', e)
+	} finally {
+		isInvoiceRequestLoading.value = false
 	}
 }
 
 async function checkPendingQuotes() {
-	if (!walletStore.wallet || !mintStore.currentMint?.mintUrl) return
+	if (!walletStore.wallet || !mintStore.activeMint?.url) return
 
 	for (const quote of pendingMintQuotes.value) {
 		try {
@@ -93,14 +111,13 @@ async function checkPendingQuotes() {
 				)
 				console.log('[proofs]', mintedProofs)
 
-				proofsByMint.value[quote.mintUrl] ??= []
-
-				proofsByMint.value[quote.mintUrl] = [
-					...(proofsByMint.value[quote.mintUrl] ?? []),
-					...(mintedProofs ?? []),
-				]
+				proofs.value = [...proofs.value, ...(mintedProofs ?? [])]
 
 				removeQuoteFromPending(quote.quote)
+
+				invoice.value = ''
+				currentQuote.value = undefined
+				amount.value = undefined
 			}
 		} catch (e) {
 			console.error('Error checking quote:', e)
@@ -120,22 +137,15 @@ const checkQuote = async (quote: StoredQuote) => {
 		)
 		console.log('[proofs]', mintedProofs)
 
-		proofsByMint.value[quote.mintUrl] ??= []
-
-		proofsByMint.value[quote.mintUrl] = [
-			...(proofsByMint.value[quote.mintUrl] ?? []),
-			...(mintedProofs ?? []),
-		]
+		proofs.value = [...proofs.value, ...(mintedProofs ?? [])]
 
 		removeQuoteFromPending(quote.quote)
 	}
 }
 
 const totalBalance = computed(() => {
-	return Object.values(proofsByMint.value).reduce(
-		(acc, proofs) => acc + sum(proofs.map((proof) => proof.amount)),
-		0
-	)
+	const balances = mintStore.mints.map((mint) => getMintBalance(mint.url))
+	return sum(balances)
 })
 
 const removeQuoteFromPending = (quoteId: string) => {
@@ -187,36 +197,35 @@ onMounted(() => {
 
 		<div class="flex flex-col gap-4">
 			<UiCard
-				v-for="mint in mintStore.availableMints"
+				v-for="mint in mintStore.mints"
 				:key="mint.url"
 				:class="{
-					'border-primary': mintStore.selectedMintUrl === mint.url,
+					'border-primary': mintStore.activeMintUrl === mint.url,
 				}"
 			>
 				<UiCardHeader class="pb-3">
 					<UiCardTitle class="flex items-center justify-between">
-						<span>{{ mint.name }}</span>
+						<span>{{ mint.info.name }}</span>
 						<UiBadge
-							v-if="mintStore.selectedMintUrl === mint.url"
+							v-if="mintStore.activeMintUrl === mint.url"
 							variant="default"
-							size="sm"
 						>
 							Selected
 						</UiBadge>
 					</UiCardTitle>
 					<UiCardDescription>{{ mint.url }}</UiCardDescription>
-					<UiCardDescription v-if="mintStore.mintsInfo[mint.url]">
-						{{ mintStore.mintsInfo[mint.url]?.description }}
+					<UiCardDescription v-if="mint.info.description">
+						{{ mint.info.description }}
 					</UiCardDescription>
 				</UiCardHeader>
 				<UiCardContent>
-					<div class="flex items-center justify-between">
+					<div class="flex flex-col items-start gap-2">
 						<p class="text-lg font-medium">
 							{{ getMintBalance(mint.url) }} sats
 						</p>
 						<UiButton
 							size="sm"
-							v-if="mintStore.selectedMintUrl !== mint.url"
+							v-if="mintStore.activeMintUrl !== mint.url"
 							variant="outline"
 							@click="mintStore.selectMint(mint.url)"
 						>
@@ -228,7 +237,7 @@ onMounted(() => {
 		</div>
 
 		<div
-			v-if="mintStore.currentMintInfo"
+			v-if="mintStore.activeMint?.info"
 			class="mt-8"
 		>
 			<h2 class="mb-4 text-xl font-medium">Mint Tokens</h2>
@@ -237,12 +246,14 @@ onMounted(() => {
 					<UiInput
 						v-model.number="amount"
 						type="number"
+						:disabled="isInvoiceRequestLoading"
 					/>
 					<UiButton
-						@click="requestMint"
-						:disabled="!amount || amount <= 0"
-						>Mint</UiButton
+						@click="requestMint()"
+						:disabled="!amount || amount <= 0 || isInvoiceRequestLoading"
 					>
+						{{ isInvoiceRequestLoading ? 'Requesting...' : 'Mint' }}
+					</UiButton>
 				</div>
 
 				<div
@@ -301,7 +312,6 @@ onMounted(() => {
 									<div class="flex items-center gap-2">
 										<span>{{ quote.amount }} sats</span>
 										<UiBadge
-											size="sm"
 											:variant="
 												quote.state === MintQuoteState.PAID
 													? 'default'
