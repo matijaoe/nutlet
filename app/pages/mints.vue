@@ -1,13 +1,7 @@
 <script lang="ts" setup>
-import {
-	CashuMint,
-	CashuWallet,
-	MintQuoteState,
-	type MintQuoteResponse,
-	type Proof,
-} from '@cashu/cashu-ts'
+import { MintQuoteState, type MintQuoteResponse } from '@cashu/cashu-ts'
 import { StorageSerializers, useClipboard, useLocalStorage } from '@vueuse/core'
-import { formatDate } from 'date-fns'
+import { useQRCode } from '@vueuse/integrations/useQRCode'
 import { sum } from '~/lib/array'
 import { useMintStore } from '~/store/mint'
 import { useWalletStore } from '~/store/wallet'
@@ -23,6 +17,7 @@ const proofsByMint = useMintProofs()
 
 const amount = ref()
 const invoice = ref('')
+const invoiceQR = useQRCode(invoice)
 const currentQuote = ref<MintQuoteResponse>()
 
 const error = ref<string | null>(null)
@@ -56,7 +51,7 @@ async function setupMintsAndWallet() {
 }
 
 async function requestMint() {
-	if (!walletStore.wallet) return
+	if (!walletStore.wallet || !mintStore.currentMint?.mintUrl) return
 
 	try {
 		// 1. Create mint quote (get Lightning invoice)
@@ -68,9 +63,11 @@ async function requestMint() {
 		pendingMintQuotes.value.push({
 			...mintQuote,
 			amount: amount.value, // Store the original amount with the quote
+			mintUrl: mintStore.currentMint?.mintUrl,
 		})
 
 		invoice.value = mintQuote.request
+		amount.value = undefined
 	} catch (e) {
 		console.error('Mint quote error:', e)
 	}
@@ -82,7 +79,7 @@ async function checkPendingQuotes() {
 	for (const quote of pendingMintQuotes.value) {
 		try {
 			// Add delay between checks to avoid rate limiting
-			await new Promise((resolve) => setTimeout(resolve, 1000))
+			await new Promise((resolve) => setTimeout(resolve, 500))
 
 			const mintQuoteChecked = await walletStore.wallet.checkMintQuote(
 				quote.quote
@@ -96,11 +93,11 @@ async function checkPendingQuotes() {
 				)
 				console.log('[proofs]', mintedProofs)
 
-				proofsByMint.value[mintStore.currentMint.mintUrl] ??= []
+				proofsByMint.value[quote.mintUrl] ??= []
 
-				proofsByMint.value[mintStore.currentMint.mintUrl] = [
-					...proofsByMint.value[mintStore.currentMint.mintUrl]!,
-					...mintedProofs,
+				proofsByMint.value[quote.mintUrl] = [
+					...(proofsByMint.value[quote.mintUrl] ?? []),
+					...(mintedProofs ?? []),
 				]
 
 				removeQuoteFromPending(quote.quote)
@@ -112,12 +109,33 @@ async function checkPendingQuotes() {
 	}
 }
 
-const currentBalance = computed(() => {
-	if (!mintStore.currentMint?.mintUrl) {
-		return 0
+const checkQuote = async (quote: StoredQuote) => {
+	const mintQuoteChecked = await walletStore.wallet?.checkMintQuote(quote.quote)
+	console.log({ quote, mintQuoteChecked })
+	console.log('[mint quote checked]', mintQuoteChecked)
+	if (mintQuoteChecked?.state === MintQuoteState.PAID) {
+		const mintedProofs = await walletStore.wallet?.mintProofs(
+			quote.amount,
+			quote.quote
+		)
+		console.log('[proofs]', mintedProofs)
+
+		proofsByMint.value[quote.mintUrl] ??= []
+
+		proofsByMint.value[quote.mintUrl] = [
+			...(proofsByMint.value[quote.mintUrl] ?? []),
+			...(mintedProofs ?? []),
+		]
+
+		removeQuoteFromPending(quote.quote)
 	}
-	const mintProofs = proofsByMint.value[mintStore.currentMint.mintUrl] || []
-	return sum(mintProofs.map((proof) => proof.amount))
+}
+
+const totalBalance = computed(() => {
+	return Object.values(proofsByMint.value).reduce(
+		(acc, proofs) => acc + sum(proofs.map((proof) => proof.amount)),
+		0
+	)
 })
 
 const removeQuoteFromPending = (quoteId: string) => {
@@ -133,6 +151,7 @@ async function cancelQuote(quoteId: string) {
 	if (currentQuote.value?.quote === quoteId) {
 		invoice.value = ''
 		currentQuote.value = undefined
+		amount.value = undefined
 	}
 }
 
@@ -155,6 +174,17 @@ onMounted(() => {
 			</UiCardHeader>
 		</UiCard>
 
+		<UiCard class="mb-4">
+			<UiCardHeader>
+				<UiCardTitle class="text-muted-foreground">Total</UiCardTitle>
+				<UiCardDescription>
+					<span class="text-2xl font-medium text-primary"
+						>{{ totalBalance }} sats</span
+					>
+				</UiCardDescription>
+			</UiCardHeader>
+		</UiCard>
+
 		<div class="flex flex-col gap-4">
 			<UiCard
 				v-for="mint in mintStore.availableMints"
@@ -163,12 +193,13 @@ onMounted(() => {
 					'border-primary': mintStore.selectedMintUrl === mint.url,
 				}"
 			>
-				<UiCardHeader>
+				<UiCardHeader class="pb-3">
 					<UiCardTitle class="flex items-center justify-between">
 						<span>{{ mint.name }}</span>
 						<UiBadge
 							v-if="mintStore.selectedMintUrl === mint.url"
-							variant="outline"
+							variant="default"
+							size="sm"
 						>
 							Selected
 						</UiBadge>
@@ -179,11 +210,12 @@ onMounted(() => {
 					</UiCardDescription>
 				</UiCardHeader>
 				<UiCardContent>
-					<div class="space-y-2">
+					<div class="flex items-center justify-between">
 						<p class="text-lg font-medium">
-							Balance: {{ getMintBalance(mint.url) }} sats
+							{{ getMintBalance(mint.url) }} sats
 						</p>
 						<UiButton
+							size="sm"
 							v-if="mintStore.selectedMintUrl !== mint.url"
 							variant="outline"
 							@click="mintStore.selectMint(mint.url)"
@@ -224,18 +256,32 @@ onMounted(() => {
 					<UiCardHeader>
 						<UiCardTitle>Lightning Invoice</UiCardTitle>
 					</UiCardHeader>
-					<UiCardContent>
-						<pre class="whitespace-pre-wrap break-all font-mono text-sm">{{
-							invoice
-						}}</pre>
+					<UiCardContent class="flex flex-col gap-3">
+						<span class="whitespace-pre-wrap break-all font-mono text-sm">
+							{{ invoice }}
+						</span>
 
-						<div class="flex items-center gap-2 mt-2">
+						<data>
+							<img
+								:src="invoiceQR"
+								alt="Lightning invoice QR code"
+							/>
+						</data>
+
+						<div class="flex items-center justify-between gap-2">
 							<UiButton
 								@click="copyInvoice"
 								size="sm"
 								variant="secondary"
 							>
-								{{ copied ? 'Copied!' : 'Copy' }}
+								{{ copied ? 'Copied!' : 'Copy invoice' }}
+							</UiButton>
+							<UiButton
+								@click="cancelQuote(currentQuote!.quote)"
+								size="sm"
+								variant="outline"
+							>
+								Cancel
 							</UiButton>
 						</div>
 					</UiCardContent>
@@ -265,12 +311,19 @@ onMounted(() => {
 											{{ quote.state }}
 										</UiBadge>
 									</div>
+									<UiBadge
+										size="sm"
+										variant="outline"
+										class="w-fit"
+									>
+										{{ quote.mintUrl }}
+									</UiBadge>
 									<span class="text-sm text-muted-foreground break-all">
 										{{ quote.quote }}
 									</span>
 									<div class="flex items-center gap-2">
 										<UiButton
-											@click="checkPendingQuotes"
+											@click="checkQuote(quote)"
 											size="sm"
 											variant="secondary"
 										>
@@ -279,7 +332,7 @@ onMounted(() => {
 										<UiButton
 											@click="cancelQuote(quote.quote)"
 											size="sm"
-											variant="secondary"
+											variant="outline"
 										>
 											Cancel
 										</UiButton>

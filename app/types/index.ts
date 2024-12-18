@@ -20,4 +20,7 @@ export type WalletOptions = {
 	denominationTarget?: number
 }
 
-export type StoredQuote = MintQuoteResponse & { amount: number }
+export type StoredQuote = MintQuoteResponse & {
+	amount: number
+	mintUrl: string
+}
