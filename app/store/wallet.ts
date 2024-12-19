@@ -1,7 +1,7 @@
 import { CashuWallet, type CashuMint } from '@cashu/cashu-ts'
 import { defineStore } from 'pinia'
 import type { WalletOptions } from '~/types'
-		
+
 export const useWalletStore = defineStore('wallet', () => {
 	const wallet = shallowRef<CashuWallet>()
 

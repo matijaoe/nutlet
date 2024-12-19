@@ -15,7 +15,7 @@ import { useWalletStore } from '~/store/wallet'
 import type { StoredQuote } from '~/types'
 
 const pendingMintQuotes = useLocalStorage<StoredQuote[]>(
-	'cashu.pending_mint_quotes',
+	'nutlet.pending_mint_quotes',
 	[],
 	{ serializer: StorageSerializers.object }
 )
@@ -26,13 +26,18 @@ const invoice = ref('')
 const invoiceQR = useQRCode(invoice)
 const currentQuote = ref<MintQuoteResponse>()
 
-const ecashAmount = ref(0)
+const ecashAmount = ref()
 
 const error = ref<string | null>(null)
 
 const mintStore = useMintStore()
 const walletStore = useWalletStore()
 
+/**
+ * Get proofs owned by a mint
+ * @param mintUrl - The URL of the mint
+ * @returns Proofs owned by the mint
+ */
 const getMintProofs = (mintUrl: string) => {
 	const mint = mintStore.mints.find((mint) => mint.url === mintUrl)
 	return proofs.value.filter((proof) =>
@@ -40,6 +45,10 @@ const getMintProofs = (mintUrl: string) => {
 	)
 }
 
+/**
+ * Remove proofs from the wallet
+ * @param proofsToRemove - The proofs to remove
+ */
 const removeProofsFromWallet = (proofsToRemove: Proof[]) => {
 	proofs.value = proofs.value.filter(
 		(p) =>
@@ -52,19 +61,11 @@ const removeProofsFromWallet = (proofsToRemove: Proof[]) => {
 	)
 }
 
-const removeSentProofsFromToken = async (encodedToken: string) => {
-	if (!walletStore.wallet || !mintStore.activeMint) return
-
-	try {
-		const decodedToken = getDecodedToken(encodedToken)
-		const sentProofs = decodedToken.proofs
-		removeProofsFromWallet(sentProofs)
-		console.log('Successfully removed sent proofs')
-	} catch (error) {
-		console.error('Error removing proofs:', error)
-	}
-}
-
+/**
+ * Send ecash to a mint
+ * @param amount - The amount of ecash to send
+ * @returns The token to redeem
+ */
 const sendEcash = async (amount: number) => {
 	if (!walletStore.wallet || !mintStore.activeMint?.url) return
 
@@ -74,7 +75,10 @@ const sendEcash = async (amount: number) => {
 		localStorage.setItem(pendingKey, 'true')
 
 		// 1. Get the split with current proofs
-		const { keep, send } = await walletStore.wallet.send(amount, proofs.value)
+		console.log('active mint', mintStore.activeMint.url)
+		console.log('wallet mint', walletStore.wallet?.mint.mintUrl)
+		const proofsForMint = getMintProofs(mintStore.activeMint.url)
+		const { keep, send } = await walletStore.wallet.send(amount, proofsForMint)
 
 		// 2. Create and verify token first
 		const tokenToSend = {
@@ -84,10 +88,12 @@ const sendEcash = async (amount: number) => {
 		} as Token
 
 		const token = getEncodedTokenV4(tokenToSend)
+		console.log('[token]', token)
 
 		try {
 			// 3. Verify token is valid and not spent
 			const decodedToken = getDecodedToken(token)
+			console.log('[decodedToken]', decodedToken)
 			// Optional: Add mint verification here
 
 			// 4. Only if verification passes, remove proofs
@@ -128,9 +134,7 @@ const recoverMultipleLostTokens = async (tokens: string[]) => {
 	}
 }
 
-const lostTokens: string[] = []
-
-// Add a recovery function
+// Manual recovery of lost proofs
 const recoverLostProofs = async (token: string) => {
 	try {
 		const decodedToken = getDecodedToken(token)
@@ -143,7 +147,7 @@ const recoverLostProofs = async (token: string) => {
 }
 
 const { copy: copyInvoice, copied } = useClipboard({
-	source: () => invoice.value,
+	source: invoice,
 })
 
 const getMintForProof = (proof: Proof) => {
@@ -167,8 +171,13 @@ async function setupMintsAndWallet() {
 		error.value = null
 		await mintStore.initAllMints()
 
+		// TODO: update wallet mint on active mint change?
 		if (mintStore.activeMint) {
-			walletStore.initWallet(mintStore.activeMint.mint)
+			walletStore.initWallet(mintStore.activeMint.mint, {
+				keys: mintStore.activeMint.keys,
+				keysets: mintStore.activeMint.keysets,
+				mintInfo: mintStore.activeMint.info,
+			})
 		}
 
 		checkPendingQuotes()
@@ -177,6 +186,15 @@ async function setupMintsAndWallet() {
 		error.value = 'Failed to connect to mints.'
 	}
 }
+
+watch(
+	() => mintStore.activeMint,
+	(newActiveMint) => {
+		if (newActiveMint) {
+			walletStore.initWallet(newActiveMint.mint)
+		}
+	}
+)
 
 const isInvoiceRequestLoading = ref(false)
 async function requestMint(mintUrl?: string) {
@@ -279,6 +297,35 @@ async function cancelQuote(quoteId: string) {
 	}
 }
 
+// Manual removal of spent token
+const removeSpentToken = async (tokenString: string) => {
+	try {
+		// Decode the token
+		const decodedToken = getDecodedToken(tokenString)
+		console.log(
+			'Token amount:',
+			decodedToken.proofs.reduce((sum, p) => sum + p.amount, 0)
+		)
+
+		// Remove these proofs from wallet
+		removeProofsFromWallet(decodedToken.proofs)
+
+		// Log success
+		console.log('Successfully removed spent token proofs')
+
+		// // Optional: Update token history
+		// const tokenHistory = JSON.parse(
+		// 	localStorage.getItem('tokenHistory') || '[]'
+		// ) as TokenHistory[]
+		// const updatedHistory = tokenHistory.map((entry) =>
+		// 	entry.token === tokenString ? { ...entry, status: 'sent' } : entry
+		// )
+		// localStorage.setItem('tokenHistory', JSON.stringify(updatedHistory))
+	} catch (error) {
+		console.error('Error removing spent token:', error)
+	}
+}
+
 onMounted(() => {
 	setupMintsAndWallet()
 })
@@ -286,6 +333,7 @@ onMounted(() => {
 
 <template>
 	<div class="pt-5">
+		<div>wallet: {{ walletStore.wallet?.mint.mintUrl }}</div>
 		<h1 class="mb-4 text-2xl font-medium">Mints</h1>
 
 		<UiCard
@@ -396,7 +444,7 @@ onMounted(() => {
 
 							<div class="flex items-center justify-between gap-2">
 								<UiButton
-									@click="copyInvoice"
+									@click="copyInvoice()"
 									size="sm"
 									variant="secondary"
 								>
@@ -470,7 +518,7 @@ onMounted(() => {
 				</div>
 			</section>
 
-			<section>
+			<section class="flex flex-col gap-3 mt-3">
 				<div class="flex items-center gap-2">
 					<UiInput
 						v-model.number="ecashAmount"
@@ -483,11 +531,10 @@ onMounted(() => {
 						Generate ecash token
 					</UiButton>
 				</div>
+				<UiButton @click="recoverMultipleLostTokens(lostTokens)"
+					>Recover lost tokens</UiButton
+				>
 			</section>
 		</div>
-
-		<UiButton @click="recoverMultipleLostTokens(lostTokens)"
-			>Recover lost tokens</UiButton
-		>
 	</div>
 </template>

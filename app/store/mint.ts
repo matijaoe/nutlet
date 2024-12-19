@@ -36,14 +36,14 @@ type StoredMint = {
 }
 
 export const useMintStore = defineStore('mint', () => {
-	const mints = useLocalStorage<StoredMint[]>('cashu.mints', [])
+	const mints = useLocalStorage<StoredMint[]>('nutlet.mints', [])
 
 	const getMint = (mintUrl: string) => {
 		return mints.value.find((m) => m.url === mintUrl) || null
 	}
 
 	const activeMintUrl = useLocalStorage<string | null>(
-		'cashu.active_mint_url',
+		'nutlet.active_mint_url',
 		defaultMints[0]?.url || null
 	)
 
