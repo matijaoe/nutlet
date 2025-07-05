@@ -15,7 +15,7 @@ useHead({
 		<div class="py-4 px-5 max-w-sm mx-auto min-h-screen flex flex-col">
 			<TheTopBar />
 
-			<NuxtPage class="grow" />
+			<NuxtPage class="grow pb-4" />
 
 			<BottomTabs class="shrink-0 mt-auto" />
 		</div>

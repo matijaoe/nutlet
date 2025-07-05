@@ -1,5 +1,4 @@
 <script lang="ts" setup>
-// $1 to sats
 const exchangeRate = ref(990)
 
 const sats = ref(2193875)
